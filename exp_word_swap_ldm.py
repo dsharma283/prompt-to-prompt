@@ -49,12 +49,8 @@ NUM_DIFFUSION_STEPS = 50
 GUIDANCE_SCALE = 5.
 MAX_NUM_WORDS = 77
 # load model and scheduler
-ldm = DiffusionPipeline.from_pretrained(model_id).to(device)
+ldm = DiffusionPipeline.from_pretrained(model_id, use_safetensors=False).to(device)
 tokenizer = ldm.tokenizer
-
-output_path = f'output/paper'
-if os.path.exists(output_path) is False:
-    os.makedirs(output_path)
 
 # ## Prompt-to-Prompt Attnetion Controllers
 # Our main logic is implemented in the `forward` call in an `AttentionControl` object.
@@ -271,7 +267,9 @@ def get_equalizer(text: str, word_select: Union[int, Tuple[int, ...]], values: U
 # In[5]:
 
 
-def aggregate_attention(attention_store: AttentionStore, res: int, from_where: List[str], is_cross: bool, select: int):
+def aggregate_attention(attention_store: AttentionStore, res: int,
+                        from_where: List[str], is_cross: bool,
+                        select: int, prompts: List[str]):
     out = []
     attention_maps = attention_store.get_average_attention()
     num_pixels = res ** 2
@@ -285,10 +283,13 @@ def aggregate_attention(attention_store: AttentionStore, res: int, from_where: L
     return out.cpu()
 
 
-def show_cross_attention(attention_store: AttentionStore, res: int, from_where: List[str], select: int = 0):
+def show_cross_attention(attention_store: AttentionStore,
+                         res: int, from_where: List[str],
+                         prompts: List[str], name_hnt: [str],
+                         select: int = 0):
     tokens = tokenizer.encode(prompts[select])
     decoder = tokenizer.decode
-    attention_maps = aggregate_attention(attention_store, res, from_where, True, select)
+    attention_maps = aggregate_attention(attention_store, res, from_where, True, select, prompts)
     images = []
     for i in range(len(tokens)):
         image = attention_maps[:, :, i]
@@ -298,13 +299,15 @@ def show_cross_attention(attention_store: AttentionStore, res: int, from_where: 
         image = np.array(Image.fromarray(image).resize((256, 256)))
         image = ptp_utils.text_under_image(image, decoder(int(tokens[i])))
         images.append(image)
-    of_name=f"{output_path}/cross_attention.jpg"
+    of_name=f"{name_hnt}-cross_attention.jpg"
     ptp_utils.view_images(np.stack(images, axis=0), of_name=of_name)
     
 
-def show_self_attention_comp(attention_store: AttentionStore, res: int, from_where: List[str],
-                        max_com=10, select: int = 0):
-    attention_maps = aggregate_attention(attention_store, res, from_where, False, select).numpy().reshape((res ** 2, res ** 2))
+def show_self_attention_comp(attention_store: AttentionStore, res: int,
+                             from_where: List[str],  prompts: List[str],
+                             name_hnt: [str], max_com=10, select: int = 0):
+    attention_maps = aggregate_attention(attention_store, res, from_where,
+                                         False, select, prompts).numpy().reshape((res ** 2, res ** 2))
     u, s, vh = np.linalg.svd(attention_maps - np.mean(attention_maps, axis=1, keepdims=True))
     images = []
     for i in range(max_com):
@@ -315,7 +318,7 @@ def show_self_attention_comp(attention_store: AttentionStore, res: int, from_whe
         image = Image.fromarray(image).resize((256, 256))
         image = np.array(image)
         images.append(image)
-    of_name=f"{output_path}/self_attention.jpg"
+    of_name=f"{name_hnt}-self_attention.jpg"
     ptp_utils.view_images(np.concatenate(images, axis=1), of_name=of_name)
 
 
@@ -349,14 +352,19 @@ def run_and_display(prompts, controller, latent=None, run_baseline=True,
                     generator=None, name_hint='default'):
     if run_baseline:
         print("w.o. prompt-to-prompt")
-        bl_name_hint = f'without-p2p-{name_hint}'
-        images, latent = run_and_display(prompts, EmptyControl(), latent=latent, run_baseline=False, name_hint=bl_name_hint)
+        bl_name_hint = f'{name_hint}-without-p2p'
+        images, latent = run_and_display(prompts, EmptyControl(),
+                                         latent=latent, run_baseline=False,
+                                         name_hint=bl_name_hint)
         print("results with prompt-to-prompt")
-        name_hint = f'with-p2p-{name_hint}'
-    images, x_t = ptp_utils.text2image_ldm(ldm, prompts, controller, latent=latent, num_inference_steps=NUM_DIFFUSION_STEPS, guidance_scale=GUIDANCE_SCALE, generator=generator)
+        name_hint = f'{name_hint}-with-p2p'
+    images, x_t = ptp_utils.text2image_ldm(ldm, prompts, controller, latent=latent,
+                                           num_inference_steps=NUM_DIFFUSION_STEPS,
+                                           guidance_scale=GUIDANCE_SCALE,
+                                           generator=generator)
     if callback is not None:
         images = callback(images)
-    of_name = f"{output_path}/{name_hint}.jpg"
+    of_name = f"{name_hint}.jpg"
     ptp_utils.view_images(images, of_name=of_name)
     return images, x_t
 
@@ -365,224 +373,132 @@ def run_and_display(prompts, controller, latent=None, run_baseline=True,
 
 # In[7]:
 
-
-g_cpu = torch.Generator().manual_seed(888)
-prompts = ["A painting of a squirrel eating a burger"]
-name_hnt=f'sq-eathing-burger'
-controller = AttentionStore()
-images, x_t = run_and_display(prompts, controller, run_baseline=False, generator=g_cpu, name_hint=name_hnt)
-show_cross_attention(controller, res=16, from_where=["up", "down"])
+def generate_source_img(save_path, prompts, name_hint, show_ca=True, show_sa=True, seed=0):
+    g_cpu = torch.Generator().manual_seed(seed)
+    name_hnt=os.path.join(name_hint, f'local-edit-source-image')
+    controller = AttentionStore()
+    images, x_t = run_and_display(prompts, controller,
+                                  run_baseline=False, generator=g_cpu,
+                                  name_hint=name_hnt)
+    if show_ca:
+        show_cross_attention(controller, res=16, from_where=["up", "down"],
+                             prompts=prompts, name_hnt=name_hnt)
+    if show_sa:
+        show_self_attention_comp(controller, res=16, from_where=["up", "down"],
+                                 prompts=prompts, name_hnt=name_hnt)
+    return images, x_t
 
 
 # ## Replacement edit with Prompt-to-Prompt
 
 # In[8]:
 
-
-prompts = ["A painting of a squirrel eating a burger",
-           "A painting of a lion eating a burger",
-           "A painting of a cat eating a burger",
-           "A painting of a deer eating a burger",
-          ]
-name_hnt = f"sq-lion-cat-deer"
-controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=.8, self_replace_steps=.2)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=True, name_hint=name_hnt)
-
-
-# ### Modify Cross-Attention injection #steps for specific words
-# Next, we can reduce the restriction on our lion by reducing the number of cross-attention injection with respect to the replacement words.
-
-# In[9]:
-
-
-prompts = ["A painting of a squirrel eating a burger",
-           "A painting of a lion eating a burger",
-           "A painting of a cat eating a burger",
-           "A painting of a deer eating a burger",
-          ]
-name_hnt = f"sq-lion-cat-deer-ca-inj"
-controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "lion": .4, "cat": .3, "deer": .2},
-                              self_replace_steps=0.2)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=False, name_hint=name_hnt)
-
-
-# ### Local Edit
-# Lastly, if we want to only replace the burger, we can apply a local edit with respect to to the replacement words.
-
-# In[10]:
-
-
-prompts = ["A painting of a squirrel eating a burger",
-           "A painting of a squirrel eating a lasagne",
-           "A painting of a squirrel eating a pretzel",
-           "A painting of a squirrel eating a sushi",
-          ]
-
-name_hnt = f"sq-burg-las-pre-sus-1"
-controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "lasagne": .2, "pretzel": .2, "sushi": .2},
-                              self_replace_steps=0.2, local_blend=None)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=False, name_hint=name_hnt)
-
-
-# In[11]:
-
-
-prompts = ["A painting of a squirrel eating a burger",
-           "A painting of a squirrel eating a lasagne",
-           "A painting of a squirrel eating a pretzel",
-           "A painting of a squirrel eating a sushi",
-          ]
-
-name_hnt = f"sq-burg-las-pre-sus-2"
-lb = LocalBlend(prompts, ("burger", "lasagne", "pretzel", "sushi"))
-controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "lasagne": .2, "pretzel": .2, "sushi": .2},
-                              self_replace_steps=0.2, local_blend=lb)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=False, name_hint=name_hnt)
-
-
-# ## Refinement edit
-
-# In[12]:
-
-
-prompts = ["A painting of a squirrel eating a burger",
-           "A watercolor painting of a squirrel eating a burger",
-           "A dark painting of a squirrel eating a burger",
-           "A realitic photo of a squirrel eating a burger",
-          ]
-
-name_hnt = f"sq-paint-wcol-dark-real"
-controller = AttentionRefine(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=.8, self_replace_steps=.2)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=True, name_hint=name_hnt)
-
-
-# In[13]:
-
-
-prompts = ["A river between mountains",
-           "A river between mountains at autumn",
-           "A river between mountains at winter",
-           "A river between mountains at sunset",
-          ]
-
-name_hnt = f"river-aut-wint-sunset"
-controller = AttentionRefine(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=.8, self_replace_steps=.4)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=True, name_hint=name_hnt)
-
-
-# In[14]:
-
-
-prompts = ["A car on a bridge",
-           "A muscle car on a bridge",
-           "A futuristic car on a bridge",
-           "A retro car on a bridge",] 
-
-name_hnt = f"car-mus-fut-ret"
-lb = LocalBlend(prompts, ("car", ("muscle", "car"), ("futuristic", "car"), ("retro", "car")))
-controller = AttentionRefine(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "car": .2},
-                             self_replace_steps=.4, local_blend=lb)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=True, name_hint=name_hnt)
-
-
-# ## Attention Re-Weighting
-
-# In[19]:
-
-
-prompts = ["A photo of a tree branch at blossom"] * 4
-name_hnt = f"tree-blossom"
-equalizer = get_equalizer(prompts[0], word_select=("blossom",), values=(.5, .0, -.5))
-controller = AttentionReweight(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=1., self_replace_steps=.2, equalizer=equalizer)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=False, name_hint=name_hnt)
-
-
-# In[20]:
-
-
-prompts = ["A photo of a poppy field at night"] * 4
-name_hnt = f"poppy-night"
-equalizer = get_equalizer(prompts[0], word_select=("night",), values=(.5, 0,  -.5))
-controller = AttentionReweight(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=1., self_replace_steps=.2, equalizer=equalizer)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=False, name_hint=name_hnt)
-
-
-# ### Edit Composition
-# It might be useful to use Attention Re-Weighting with a previous edit method.
-
-# In[21]:
-
-
-prompts = ["cake",
-           "birthday cake"] 
-
-name_hnt = f"bday-cake"
-lb = LocalBlend(prompts, ("cake", ("birthday", "cake")))
-controller = AttentionRefine(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=.8, self_replace_steps=.4, local_blend=lb)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=False, name_hint=name_hnt)
-
-
-# result with more attetnion to `"birthday"`
-
-# In[22]:
-
-
-prompts = ["cake",
-           "birthday cake"] 
-
-name_hnt = f"bday-5att"
-lb = LocalBlend(prompts, ("cake", ("birthday", "cake")))
-controller_a = AttentionRefine(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=.8, self_replace_steps=.4, local_blend=lb)
-
-## pay 5 times more attention to the word "birthday"
-equalizer = get_equalizer(prompts[1], ("birthday"), (5,))
-controller = AttentionReweight(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=.8, self_replace_steps=.4, equalizer=equalizer, local_blend=lb, controller=controller_a)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=False, name_hint=name_hnt)
-
-
-# In[23]:
-
-
-prompts = ["A car on a bridge",
-           "A cabriolet car on a bridge"]
-
-name_hnt = f"car-cabrio"
-lb = LocalBlend(prompts, ("car", ("cabriolet", "car")))
-controller = AttentionRefine(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "car": .2},
-                             self_replace_steps=.2, local_blend=lb)
-
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=False, name_hint=name_hnt)
-
-
-# result with more attetnion to `"cabriolet"`
-
-# In[25]:
-
-
-prompts = ["A car on a bridge",
-           "A cabriolet car on a bridge"]
-
-name_hnt = f"car-cabrio-4att"
-lb = LocalBlend(prompts, ("car", ("cabriolet", "car")))
-controller_a = AttentionRefine(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "car": .2}, self_replace_steps=.2, local_blend=lb)
-
-## pay 4 times more attention to the word "cabriolet"
-equalizer = get_equalizer(prompts[1], ("cabriolet"), (4,))
-controller = AttentionReweight(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "car": .2},
-                               self_replace_steps=.2, equalizer=equalizer, local_blend=lb, controller=controller_a)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=False, name_hint=name_hnt)
-
-prompts = ["A dron near wild animals",
-           "A dron near wild animals and trees",
-          ]
-
-name_hnt = f"dron-mountain-trees"
-controller = AttentionRefine(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=.8, self_replace_steps=.4)
-_ = run_and_display(prompts, controller, latent=x_t, run_baseline=True, name_hint=name_hnt)
-
-
-# In[ ]:
-
-
-
+def perform_word_swap(prompts, x_t, ca, sa, baseline, name_hnt):
+        controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=ca, self_replace_steps=.0, local_blend=None)
+        _ = run_and_display(prompts, controller, latent=x_t, run_baseline=baseline, name_hint=name_hnt)
+
+def perform_local_edit_inject_ca(prompts, latent, name_hint):
+    ca = 0.0
+    for idx in range(0, 9):
+        name_hnt = os.path.join(name_hint, f"local-edit-{idx + 1}-ca-{ca}")
+        if not idx:
+            baseline = True
+        else:
+            baseline = False
+        perform_word_swap(prompts, latent, ca, 0, baseline, name_hnt)
+        ca +=0.125
+
+def perform_local_edit_inject_sa(prompts, name_hint):
+    sa = 0.0
+    for idx in range(0, 9):
+        name_hnt = os.path.join(name_hint, f"local-edit-{idx + 1}-sa-{sa}")
+        if not idx:
+            baseline = True
+        else:
+            baseline = False
+
+        controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=0.0, self_replace_steps=sa, local_blend=None)
+        _ = run_and_display(prompts, controller, latent=x_t, run_baseline=baseline, name_hint=name_hnt)
+        sa +=0.125
+
+
+output_path = f'output/global_edits'
+
+paper_fig10 = f'{output_path}/paper-fig10'
+paper_fig24 = f'{output_path}/paper-fig24'
+my_own = f'{output_path}/myown'
+
+if os.path.exists(paper_fig10) is False:
+    os.makedirs(paper_fig10)
+if os.path.exists(paper_fig24) is False:
+    os.makedirs(paper_fig24)
+if os.path.exists(my_own) is False:
+    os.makedirs(my_own)
+
+if __name__ == "__main__":
+    ''' For Fig-10 '''
+    prompts = ["Photo of a cat riding on a bicycle."]
+    images, x_t = generate_source_img(save_path=None, prompts=prompts, name_hint=paper_fig10,
+                                      show_ca=True, show_sa=True, seed=475)
+    prompts = ["Photo of a cat riding on a bicycle.",
+               "Photo of a cat riding on a motorcycle.",
+               "Photo of a cat riding on a train.",
+               "Photo of a chicken riding on a bicycle.",
+               "Photo of a fish riding on a bicycle."]
+    perform_local_edit_inject_ca(prompts, name_hint=paper_fig10, latent=x_t)
+
+    ''' For Fig-24 '''
+    prompts = ["A painting of a squirrel eating a burger."]
+    images, x_t = generate_source_img(save_path=None, prompts=prompts, name_hint=paper_fig24,
+                                      show_ca=False, show_sa=False, seed=888)
+
+    prompts = ["A painting of a squirrel eating a burger.",
+               "A painting of a squirrel eating a pizza."]
+    #images, x_t = generate_source_img(save_path=None, prompts=prompts, name_hint=paper_fig10,
+    #                                  show_ca=False, show_sa=False, seed=888)
+    name_hnt = os.path.join(paper_fig24, f"local-edit-burger2pizza")
+    perform_word_swap(prompts=prompts, x_t=x_t, ca=0.8, sa=0.8, baseline=True, name_hnt=name_hnt)
+
+    prompts = ["A bench with a pile of books on top.",
+               "A bench with a pile of magazines on top."]
+    #images, x_t = generate_source_img(save_path=None, prompts=prompts, name_hint=paper_fig10,
+    #                                  show_ca=False, show_sa=False, seed=500)
+    name_hnt = os.path.join(paper_fig24, f"local-edit-books-magazine")
+    perform_word_swap(prompts=prompts, x_t=x_t, ca=0.9, sa=0.1, baseline=True, name_hnt=name_hnt)
+
+    prompts = ["Banknote portrait of a cow.",
+               "Banknote portrait of a horse."]
+    #images, x_t = generate_source_img(save_path=None, prompts=prompts, name_hint=paper_fig10,
+    #                                  show_ca=False, show_sa=False, seed=230)
+    name_hnt = os.path.join(paper_fig24, f"local-edit-cow-horse")
+    perform_word_swap(prompts=prompts, x_t=x_t, ca=0.9, sa=0.1, baseline=True, name_hnt=name_hnt)
+
+    prompts = ["Snail in the middle of the forest. Afternoon light.",
+               "Turtle in the middle of the ofrest. Afternoon light."]
+    #images, x_t = generate_source_img(save_path=None, prompts=prompts, name_hint=paper_fig10,
+    #                                  show_ca=False, show_sa=False, seed=888)
+    name_hnt = os.path.join(paper_fig24, f"local-edit-snail-turtle")
+    perform_word_swap(prompts=prompts, x_t=x_t, ca=0.9, sa=0.1, baseline=True, name_hnt=name_hnt)
+
+    prompts = ["A bowl with apples on a table.",
+               "A bowl with snacks on a table."]
+    #images, x_t = generate_source_img(save_path=None, prompts=prompts, name_hint=paper_fig10,
+    #                                  show_ca=False, show_sa=False, seed=767)
+    name_hnt = os.path.join(paper_fig24, f"local-edit-apples-snacks")
+    perform_word_swap(prompts=prompts, x_t=x_t, ca=0.9, sa=0.1, baseline=True, name_hnt=name_hnt)
+
+    prompts = ["Photo of a butterfly on a flower.",
+               "Photo of a bee on a flower."]
+    #images, x_t = generate_source_img(save_path=None, prompts=prompts, name_hint=paper_fig10,
+    #                                  show_ca=False, show_sa=False, seed=888)
+    name_hnt = os.path.join(paper_fig24, f"local-edit-butterfly-bee")
+    perform_word_swap(prompts=prompts, x_t=x_t, ca=0.9, sa=0.1, baseline=True, name_hnt=name_hnt)
+
+    """ My own """
+    prompts = ["A photo of a bus on Indian roads.",
+               "A photo of an airoplane on Indian roads."]
+    #images, x_t = generate_source_img(save_path=None, prompts=prompts, name_hint=my_own,
+    #                                  show_ca=False, show_sa=False, seed=690)
+    name_hnt = os.path.join(my_own, f"local-edit-own-bus-airoplane")
+    perform_word_swap(prompts=prompts, x_t=x_t, ca=0.9, sa=0.1, baseline=True, name_hnt=name_hnt)
 

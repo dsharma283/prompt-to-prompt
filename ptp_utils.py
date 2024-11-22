@@ -19,7 +19,8 @@ from PIL import Image, ImageDraw, ImageFont
 import cv2
 from typing import Optional, Union, Tuple, List, Callable, Dict
 from IPython.display import display
-from tqdm.notebook import tqdm
+#from tqdm.notebook import tqdm
+from tqdm import tqdm
 
 
 
@@ -36,7 +37,7 @@ def text_under_image(image: np.ndarray, text: str, text_color: Tuple[int, int, i
     return img
 
 
-def view_images(images, num_rows=1, offset_ratio=0.02):
+def view_images(images, num_rows=1, offset_ratio=0.02, of_name=None):
     if type(images) is list:
         num_empty = len(images) % num_rows
     elif images.ndim == 4:
@@ -60,7 +61,10 @@ def view_images(images, num_rows=1, offset_ratio=0.02):
                 i * num_cols + j]
 
     pil_img = Image.fromarray(image_)
-    display(pil_img)
+    if of_name is None:
+        display(pil_img)
+    else :
+        pil_img.save(of_name)
 
 
 def diffusion_step(model, controller, latents, context, t, guidance_scale, low_resource=False, optimize_matrix=None, optimize_matrix_=None):

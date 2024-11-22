@@ -48,7 +48,7 @@ NUM_DIFFUSION_STEPS = 50
 GUIDANCE_SCALE = 7.5
 MAX_NUM_WORDS = 77
 device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-ldm_stable = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", local_files_only=True).to(device)
+ldm_stable = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", local_files_only=False).to(device)
 # ldm_stable = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", force_download=True).to(device)
 tokenizer = ldm_stable.tokenizer
 
