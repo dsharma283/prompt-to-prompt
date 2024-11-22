@@ -496,7 +496,7 @@ if __name__ == "__main__":
 
     """ My own """
     prompts = ["A photo of a bus on Indian roads.",
-               "A photo of an airoplane on Indian roads."]
+               "A photo of an airplane on Indian roads."]
     #images, x_t = generate_source_img(save_path=None, prompts=prompts, name_hint=my_own,
     #                                  show_ca=False, show_sa=False, seed=690)
     name_hnt = os.path.join(my_own, f"local-edit-own-bus-airoplane")
